@@ -113,112 +113,115 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         // Actualizar etiqueta de archivo cuando se selecciona un archivo
-        document.getElementById('archivo').addEventListener('change', function() {
-            const fileName = this.files[0] ? this.files[0].name : 'Elegir archivo';
-            document.querySelector('label[for="archivo"]').textContent = fileName;
-            
-            // Mostrar información del archivo
-            if (this.files[0]) {
-                const fileSize = (this.files[0].size / 1024 / 1024).toFixed(2);
-                document.getElementById('archivoInfo').textContent = `Tamaño: ${fileSize} MB`;
-            } else {
-                document.getElementById('archivoInfo').textContent = '';
-            }
-        });
-        
-        document.getElementById('plantilla').addEventListener('change', function() {
-            const fileName = this.files[0] ? this.files[0].name : 'Elegir archivo';
-            document.querySelector('label[for="plantilla"]').textContent = fileName;
-            
-            // Mostrar información del archivo
-            if (this.files[0]) {
-                const fileSize = (this.files[0].size / 1024 / 1024).toFixed(2);
-                document.getElementById('plantillaInfo').textContent = `Tamaño: ${fileSize} MB`;
-            } else {
-                document.getElementById('plantillaInfo').textContent = '';
-            }
-        });
-        
         function generarDocumentos() {
-            const archivo = document.getElementById('archivo').files[0];
-            const plantilla = document.getElementById('plantilla').files[0];
-            const carpetaSalida = document.getElementById('carpetaSalida').value;
-            const region = document.getElementById('region').checked;
+    const archivo = document.getElementById('archivo').files[0];
+    const plantilla = document.getElementById('plantilla').files[0];
+    const carpetaSalida = document.getElementById('carpetaSalida').value;
+    const region = document.getElementById('region').checked;
+    
+    if (!archivo || !plantilla) {
+        alert('Por favor, seleccione ambos archivos.');
+        return;
+    }
+    
+    const resultContainer = document.getElementById('resultContainer');
+    resultContainer.style.display = 'block';
+    
+    const progressBar = resultContainer.querySelector('.progress-bar');
+    
+    // Simular progreso
+    let progress = 0;
+    const interval = setInterval(() => {
+        progress += 10;
+        progressBar.style.width = progress + '%';
+        
+        if (progress >= 90) {
+            clearInterval(interval);
+        }
+    }, 200);
+    
+    // Crear FormData para enviar los archivos
+    const formData = new FormData();
+    formData.append('archivo', archivo);
+    formData.append('plantilla', plantilla);
+    
+    // Enviar los archivos al servidor
+    fetch('/api/generar_documentos', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        clearInterval(interval);
+        progressBar.style.width = '100%';
+        
+        if (data.success) {
+            // Crear una lista de archivos para descargar
+            let archivosHtml = '<div class="list-group">';
             
-            if (!archivo || !plantilla || !carpetaSalida) {
-                alert('Por favor, seleccione ambos archivos y especifique una carpeta de salida.');
-                return;
-            }
-            
-            const resultContainer = document.getElementById('resultContainer');
-            resultContainer.style.display = 'block';
-            
-            const progressBar = resultContainer.querySelector('.progress-bar');
-            
-            // Simular progreso
-            let progress = 0;
-            const interval = setInterval(() => {
-                progress += 10;
-                progressBar.style.width = progress + '%';
-                
-                if (progress >= 90) {
-                    clearInterval(interval);
+            data.archivos.forEach(archivo => {
+                // Crear un blob a partir del contenido base64
+                const binaryString = window.atob(archivo.contenido);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
                 }
-            }, 200);
-            
-            // Crear FormData para enviar los archivos
-            const formData = new FormData();
-            formData.append('archivo', archivo);
-            formData.append('plantilla', plantilla);
-            formData.append('carpeta_salida', carpetaSalida);
-            formData.append('organizar_por_region', region);
-            
-            // Enviar los archivos al servidor
-            fetch('/api/generar_documentos', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                clearInterval(interval);
-                progressBar.style.width = '100%';
+                const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
                 
-                if (data.success) {
-                    resultContainer.innerHTML = `
-                        <div class="alert alert-success">
-                            <h5>¡Proceso completado!</h5>
-                            <p>${data.message}</p>
-                            <p>Puedes encontrar los documentos generados en la carpeta: ${carpetaSalida}</p>
-                            <div class="mt-3">
-                                <button class="btn btn-primary" onclick="location.reload()">Generar más documentos</button>
-                            </div>
+                // Crear una URL para el blob
+                const url = URL.createObjectURL(blob);
+                
+                // Agregar un enlace de descarga
+                archivosHtml += `
+                    <a href="${url}" download="${archivo.nombre}" class="list-group-item list-group-item-action">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h5 class="mb-1">${archivo.nombre}</h5>
                         </div>
-                    `;
-                } else {
-                    resultContainer.innerHTML = `
-                        <div class="alert alert-danger">
-                            <h5>Error</h5>
-                            <p>${data.error}</p>
-                            <div class="mt-3">
-                                <button class="btn btn-primary" onclick="location.reload()">Intentar de nuevo</button>
-                            </div>
-                        </div>
-                    `;
-                }
-            })
-            .catch(error => {
-                clearInterval(interval);
-                resultContainer.innerHTML = `
-                    <div class="alert alert-danger">
-                        <h5>Error</h5>
-                        <p>${error}</p>
-                        <div class="mt-3">
-                            <button class="btn btn-primary" onclick="location.reload()">Intentar de nuevo</button>
-                        </div>
-                    </div>
+                        <p>Click para descargar</p>
+                    </a>
                 `;
             });
+            
+            archivosHtml += '</div>';
+            
+            resultContainer.innerHTML = `
+                <div class="alert alert-success">
+                    <h5>¡Proceso completado!</h5>
+                    <p>${data.message}</p>
+                    <div class="mt-3">
+                        <h6>Archivos generados:</h6>
+                        ${archivosHtml}
+                    </div>
+                    <div class="mt-3">
+                        <button class="btn btn-primary" onclick="location.reload()">Generar más documentos</button>
+                    </div>
+                </div>
+            `;
+        } else {
+            resultContainer.innerHTML = `
+                <div class="alert alert-danger">
+                    <h5>Error</h5>
+                    <p>${data.error}</p>
+                    <div class="mt-3">
+                        <button class="btn btn-primary" onclick="location.reload()">Intentar de nuevo</button>
+                    </div>
+                </div>
+            `;
         }
+    })
+    .catch(error => {
+        clearInterval(interval);
+        resultContainer.innerHTML = `
+            <div class="alert alert-danger">
+                <h5>Error</h5>
+                <p>${error}</p>
+                <div class="mt-3">
+                    <button class="btn btn-primary" onclick="location.reload()">Intentar de nuevo</button>
+                </div>
+            </div>
+        `;
+    });
+}
     </script>
 </body>
 </html>
