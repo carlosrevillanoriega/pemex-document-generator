@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify
 import os
 import pandas as pd
 import sys
@@ -16,18 +16,13 @@ import tempfile
 import base64
 from io import BytesIO
 
-# Configurar la aplicación Flask para Vercel
-app = Flask(__name__, static_folder='../static', static_url_path='/')
-
 # Configuración para subir archivos
 ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route('/')
-def index():
-    return send_from_directory('../static', 'index.html')
+app = Flask(__name__)
 
 @app.route('/api/generar_documentos', methods=['POST'])
 def generar_documentos():
@@ -374,9 +369,7 @@ def set_cell_value(worksheet, row, column, value):
         # Si no se encontró ninguna fusión que contenga la celda, relanzar el error original
         raise e
 
-# Handler para Vercel
-app_handler = app
-
-# Para desarrollo local
+# Para Vercel, necesitamos exportar la app como una variable llamada 'app'
+# Esto es necesario para que Vercel pueda importar y ejecutar tu aplicación
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
