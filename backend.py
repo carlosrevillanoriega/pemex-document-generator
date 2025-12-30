@@ -12,19 +12,21 @@ from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Border, Side, Alignment, Font, PatternFill
+import tempfile
+import base64
+from io import BytesIO
 
 app = Flask(__name__, static_folder='static', static_url_path='')
 
 # Configuración para subir archivos
-UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-# Crear carpeta de uploads si no existe
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/')
+def index():
+    return send_from_directory('static', 'index.html')
 
 @app.route('/api/generar_documentos', methods=['POST'])
 def generar_documentos():
@@ -44,33 +46,13 @@ def generar_documentos():
         if not (allowed_file(archivo.filename) and allowed_file(plantilla.filename)):
             return jsonify({'error': 'Formato de archivo no válido'}), 400
         
-        # Guardar archivos temporalmente
-        archivo_filename = secure_filename(archivo.filename)
-        plantilla_filename = secure_filename(plantilla.filename)
-        
-        archivo_path = os.path.join(app.config['UPLOAD_FOLDER'], archivo_filename)
-        plantilla_path = os.path.join(app.config['UPLOAD_FOLDER'], plantilla_filename)
-        
-        archivo.save(archivo_path)
-        plantilla.save(plantilla_path)
-        
-        # Obtener carpeta de salida
-        carpeta_salida = request.form.get('carpeta_salida')
-        organizar_por_region = request.form.get('organizar_por_region', 'false').lower() == 'true'
-        
-        if not carpeta_salida:
-            return jsonify({'error': 'No se especificó una carpeta de salida'}), 400
-        
-        # Convertir ruta relativa a absoluta si es necesario
-        if not os.path.isabs(carpeta_salida):
-            carpeta_salida = os.path.abspath(carpeta_salida)
-        
-        # Crear directorio de salida si no existe
-        os.makedirs(carpeta_salida, exist_ok=True)
+        # Guardar archivos temporalmente en memoria
+        archivo_stream = BytesIO(archivo.read())
+        plantilla_stream = BytesIO(plantilla.read())
         
         # Leer el Excel origen
         try:
-            df = pd.read_excel(archivo_path)
+            df = pd.read_excel(archivo_stream)
             print(f"Leídos {len(df)} registros del archivo origen")
             
             # Verificar si el DataFrame tiene datos
@@ -96,7 +78,7 @@ def generar_documentos():
         
         # Verificar la plantilla
         try:
-            wb_plantilla = load_workbook(plantilla_path)
+            wb_plantilla = load_workbook(plantilla_stream)
             print(f"Plantilla tiene {len(wb_plantilla.worksheets)} hojas")
             
             # Verificar que haya al menos 2 hojas
@@ -106,38 +88,26 @@ def generar_documentos():
             else:
                 indice_hoja = 1
                 
-            wb_plantilla.close()
-            
         except Exception as e:
             return jsonify({'error': f'Error al verificar la plantilla: {str(e)}'}), 500
         
-        # Procesar documentos
+        # Procesar documentos y generar archivos en memoria
+        archivos_generados = []
+        
         try:
-            if organizar_por_region and 'REGION' in df.columns:
-                # Agrupar por región
-                df_agrupado = df.groupby('REGION')
-                
-                # Crear carpeta para cada región
-                for region, grupo in df_agrupado:
-                    # Asegurarse de que region es un string
-                    region_str = str(region) if region is not None else "sin_region"
-                    ruta_region = os.path.join(carpeta_salida, region_str)
-                    os.makedirs(ruta_region, exist_ok=True)
-                    
-                    # Procesar cada institución en la región
-                    instituciones_region = grupo.groupby('INSTITUCION')
-                    for institucion, datos_institucion in instituciones_region:
-                        procesar_institucion(institucion, datos_institucion, plantilla_path, ruta_region, indice_hoja)
-                
-                return jsonify({'success': True, 'message': 'Documentos generados por región'})
-            else:
-                # Agrupar por institución
-                instituciones = df.groupby('INSTITUCION')
-                
-                for institucion, datos_institucion in instituciones:
-                    procesar_institucion(institucion, datos_institucion, plantilla_path, carpeta_salida, indice_hoja)
-                
-                return jsonify({'success': True, 'message': 'Documentos generados'})
+            # Agrupar por institución
+            instituciones = df.groupby('INSTITUCION')
+            
+            for institucion, datos_institucion in instituciones:
+                archivo_generado = procesar_institucion_en_memoria(institucion, datos_institucion, wb_plantilla, indice_hoja)
+                if archivo_generado:
+                    archivos_generados.append(archivo_generado)
+            
+            return jsonify({
+                'success': True, 
+                'message': 'Documentos generados',
+                'archivos': archivos_generados
+            })
         
         except Exception as e:
             return jsonify({'error': f'Error al procesar documentos: {str(e)}'}), 500
@@ -145,19 +115,14 @@ def generar_documentos():
     except Exception as e:
         return jsonify({'error': f'Error: {str(e)}'}), 500
 
-def procesar_institucion(institucion, datos_institucion, plantilla_path, ruta_salida, indice_hoja=1):
-    """Procesa los datos de una institución y genera un documento"""
+def procesar_institucion_en_memoria(institucion, datos_institucion, wb_plantilla, indice_hoja=1):
+    """Procesa los datos de una institución y genera un documento en memoria"""
     # Asegurarse de que institucion es un string
     institucion_str = str(institucion) if institucion is not None else "sin_institucion"
     
-    # Copiar plantilla a un archivo temporal
-    nombre_archivo_temporal = f"temp_{re.sub(r'[^a-zA-Z0-9]', '_', institucion_str)}.xlsx"
-    archivo_temporal = os.path.join(ruta_salida, nombre_archivo_temporal)
-    shutil.copy2(plantilla_path, archivo_temporal)
-    
     try:
-        # Abrir el archivo temporal
-        wb = load_workbook(archivo_temporal)
+        # Crear una copia del libro de trabajo en memoria
+        wb = load_workbook(BytesIO(save_virtual_workbook(wb_plantilla)))
         
         # Verificar que el índice de la hoja sea válido
         if indice_hoja >= len(wb.worksheets):
@@ -297,24 +262,32 @@ def procesar_institucion(institucion, datos_institucion, plantilla_path, ruta_sa
         nombre_base_original = "2_REG. DE PROG. INST. EDUCATIVA - PEMEX 2025 ALTIPLANO.xlsx"
         nombre_limpio = re.sub(r'[^a-zA-Z0-9\s]', '', institucion_str)
         nombre_archivo = nombre_base_original.replace("INST. EDUCATIVA", nombre_limpio)
-        ruta_completa = os.path.join(ruta_salida, nombre_archivo)
         
-        # Guardar archivo
-        wb.save(ruta_completa)
+        # Guardar el archivo en memoria
+        archivo_memoria = BytesIO()
+        wb.save(archivo_memoria)
+        archivo_memoria.seek(0)
         
-        # Eliminar archivo temporal
-        os.remove(archivo_temporal)
+        # Convertir a base64 para enviar al frontend
+        archivo_base64 = base64.b64encode(archivo_memoria.read()).decode('utf-8')
         
-        print(f"Documento generado: {ruta_completa}")
+        print(f"Documento generado en memoria: {nombre_archivo}")
+        
+        return {
+            'nombre': nombre_archivo,
+            'contenido': archivo_base64
+        }
         
     except Exception as e:
         print(f"Error al procesar institución {institucion_str}: {str(e)}")
-        
-        # Eliminar archivo temporal si existe
-        if os.path.exists(archivo_temporal):
-            os.remove(archivo_temporal)
-        
         raise e
+
+def save_virtual_workbook(workbook):
+    """Guarda un libro de trabajo en memoria"""
+    virtual_workbook = BytesIO()
+    workbook.save(virtual_workbook)
+    virtual_workbook.seek(0)
+    return virtual_workbook.read()
 
 def format_career_name(career_name):
     """
@@ -400,10 +373,7 @@ def set_cell_value(worksheet, row, column, value):
         # Si no se encontró ninguna fusión que contenga la celda, relanzar el error original
         raise e
 
-# Ruta para servir el frontend
-@app.route('/')
-def index():
-    return send_from_directory('static', 'index.html')
-
+# Para Vercel, necesitamos exportar la app como una variable llamada 'app'
+# Esto es necesario para que Vercel pueda importar y ejecutar tu aplicación
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
