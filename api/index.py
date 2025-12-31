@@ -1,20 +1,14 @@
-from flask import Flask, request, jsonify
-import os
-import pandas as pd
-import sys
-import subprocess
 import json
-from datetime import datetime
-import re
-from werkzeug.utils import secure_filename
-import shutil
-from openpyxl import load_workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.utils import get_column_letter
-from openpyxl.styles import Border, Side, Alignment, Font, PatternFill
-import tempfile
 import base64
 from io import BytesIO
+import re
+import pandas as pd
+from flask import Flask, request, jsonify, send_from_directory
+from openpyxl import load_workbook
+from openpyxl.styles import Border, Side, Alignment, Font
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
 
 # Configuración para subir archivos
 ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
@@ -22,7 +16,9 @@ ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-app = Flask(__name__)
+@app.route('/')
+def index():
+    return send_from_directory('../static', 'index.html')
 
 @app.route('/api/generar_documentos', methods=['POST'])
 def generar_documentos():
@@ -57,17 +53,10 @@ def generar_documentos():
                 
             # Verificar columnas necesarias
             columnas_requeridas = ['INSTITUCION']
-            columnas_opcionales = ['NOMBRES', 'APELLIDO PATERNO', 'CARRERA', 'ACTIVIDADES', 'FECHA DE INICIO', 
-                                 'NOMBRE A QUIEN SE DIRIGE CARTA DE ACEPTACION', 'CARGO ESCOLAR', 'REGION']
             
             for columna in columnas_requeridas:
                 if columna not in df.columns:
                     return jsonify({'error': f'No se encontró la columna requerida: {columna}'}), 400
-            
-            # Informar sobre columnas opcionales que faltan
-            columnas_faltantes = [col for col in columnas_opcionales if col not in df.columns]
-            if columnas_faltantes:
-                print(f"Advertencia: No se encontraron las siguientes columnas opcionales: {', '.join(columnas_faltantes)}")
                     
         except Exception as e:
             return jsonify({'error': f'Error al leer el archivo Excel: {str(e)}'}), 500
@@ -130,18 +119,16 @@ def procesar_institucion_en_memoria(institucion, datos_institucion, wb_plantilla
         # Obtener la fecha de inicio más antigua
         if 'FECHA DE INICIO' in datos_institucion.columns and not datos_institucion['FECHA DE INICIO'].isna().all():
             fecha_inicio = datos_institucion.sort_values('FECHA DE INICIO').iloc[0]['FECHA DE INICIO']
-            # Función para establecer valor en celda, manejando celdas fusionadas
             set_cell_value(ws, 7, 5, fecha_inicio)
         
         # Actualizar dirección (por defecto para ALTIPLANO)
-        # Función para establecer valor en celda, manejando celdas fusionadas
         set_cell_value(ws, 66, 6, "Bahía de Ballenas No. 5, Piso 08, Col. Verónica Anzures, Alcaldía Miguel Hidalgo, C.P. 11300, CDMX.")
         
         # Agrupar por carrera si la columna existe
         if 'CARRERA' in datos_institucion.columns:
             carreras = datos_institucion.groupby('CARRERA')
             
-            # Inicializar fila para carreras (igual que en el script PowerShell)
+            # Inicializar fila para carreras
             fila_actual = 88
             
             # Definir estilos para las filas adicionales
@@ -189,11 +176,10 @@ def procesar_institucion_en_memoria(institucion, datos_institucion, wb_plantilla
                     ws.column_dimensions['G'].width = 50
                 
                 # Escribir nombre de carrera y número de estudiantes en la primera fila
-                # Función para establecer valor en celda, manejando celdas fusionadas
                 set_cell_value(ws, fila_actual, 2, nombre_carrera_formateado)
                 set_cell_value(ws, fila_actual, 5, num_estudiantes)
                 
-                # Replicar valores en lugar de combinar celdas (igual que en el script PowerShell)
+                # Replicar valores en lugar de combinar celdas
                 for i in range(1, num_estudiantes):
                     fila_siguiente = fila_actual + i
                     
@@ -215,7 +201,7 @@ def procesar_institucion_en_memoria(institucion, datos_institucion, wb_plantilla
                     set_cell_value(ws, fila_siguiente, 2, nombre_carrera_formateado)
                     set_cell_value(ws, fila_siguiente, 5, num_estudiantes)
                 
-                # Obtener actividades únicas de los estudiantes (igual que en el script PowerShell)
+                # Obtener actividades únicas de los estudiantes
                 actividades_unicas = []
                 for _, estudiante in estudiantes_carrera.iterrows():
                     actividad = estudiante['ACTIVIDADES'] if 'ACTIVIDADES' in estudiante and pd.notna(estudiante['ACTIVIDADES']) else None
@@ -223,7 +209,7 @@ def procesar_institucion_en_memoria(institucion, datos_institucion, wb_plantilla
                     if actividad is not None and actividad not in actividades_unicas:
                         actividades_unicas.append(actividad)
                 
-                # Agregar actividades únicas (igual que en el script PowerShell)
+                # Agregar actividades únicas
                 fila_actividad = fila_actual
                 for actividad in actividades_unicas:
                     # Formatear la actividad con la función de formato de oraciones
@@ -241,20 +227,18 @@ def procesar_institucion_en_memoria(institucion, datos_institucion, wb_plantilla
                     set_cell_value(ws, fila_actividad, 7, actividad_formateada)
                     fila_actividad += 1
                 
-                # Actualizar siguiente fila (igual que en el script PowerShell)
+                # Actualizar siguiente fila
                 fila_actual = fila_actividad
         
-        # Actualizar datos del responsable si están disponibles (igual que en el script PowerShell)
+        # Actualizar datos del responsable si están disponibles
         if len(datos_institucion) > 0:
             responsable = datos_institucion.iloc[0]
             if 'NOMBRE A QUIEN SE DIRIGE CARTA DE ACEPTACION' in responsable.index and pd.notna(responsable['NOMBRE A QUIEN SE DIRIGE CARTA DE ACEPTACION']):
-                # Función para establecer valor en celda, manejando celdas fusionadas
                 set_cell_value(ws, 116, 5, responsable['INSTITUCION'])
                 set_cell_value(ws, 119, 5, responsable['NOMBRE A QUIEN SE DIRIGE CARTA DE ACEPTACION'])
                 set_cell_value(ws, 122, 5, responsable['CARGO ESCOLAR'])
         
         # Construir el nombre del archivo reemplazando "INST. EDUCATIVA" por el nombre de la escuela
-        # Usar el mismo formato que el script PowerShell
         nombre_base_original = "2_REG. DE PROG. INST. EDUCATIVA - PEMEX 2025 ALTIPLANO.xlsx"
         nombre_limpio = re.sub(r'[^a-zA-Z0-9\s]', '', institucion_str)
         nombre_archivo = nombre_base_original.replace("INST. EDUCATIVA", nombre_limpio)
